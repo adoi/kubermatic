@@ -453,6 +453,7 @@ const (
 	ClusterConditionIPAMControllerReconcilingSuccess                             ClusterConditionType = "IPAMControllerReconciledSuccessfully"
 	ClusterConditionKubeVirtNetworkControllerSuccess                             ClusterConditionType = "KubeVirtNetworkControllerReconciledSuccessfully"
 	ClusterConditionClusterBackupControllerReconcilingSuccess                    ClusterConditionType = "ClusterBackupControllerReconciledSuccessfully"
+	ClusterConditionDefaultPolicyControllerReconcilingSuccess                    ClusterConditionType = "DefaultPolicyControllerReconciledSuccessfully"
 
 	ClusterConditionEtcdClusterInitialized ClusterConditionType = "EtcdClusterInitialized"
 	ClusterConditionEncryptionInitialized  ClusterConditionType = "EncryptionInitialized"

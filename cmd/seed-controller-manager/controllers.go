@@ -35,6 +35,7 @@ import (
 	seedconstraintsynchronizer "k8c.io/kubermatic/v2/pkg/controller/seed-controller-manager/constraint-controller"
 	constrainttemplatecontroller "k8c.io/kubermatic/v2/pkg/controller/seed-controller-manager/constraint-template-controller"
 	defaultapplicationcontroller "k8c.io/kubermatic/v2/pkg/controller/seed-controller-manager/default-application-controller"
+	defaultpolicycontroller "k8c.io/kubermatic/v2/pkg/controller/seed-controller-manager/default-policy-controller"
 	encryptionatrestcontroller "k8c.io/kubermatic/v2/pkg/controller/seed-controller-manager/encryption-at-rest-controller"
 	etcdbackupcontroller "k8c.io/kubermatic/v2/pkg/controller/seed-controller-manager/etcdbackup"
 	etcdrestorecontroller "k8c.io/kubermatic/v2/pkg/controller/seed-controller-manager/etcdrestore"
@@ -87,6 +88,7 @@ var AllControllers = map[string]controllerCreator{
 	defaultapplicationcontroller.ControllerName:             createDefaultApplicationController,
 	clustercredentialscontroller.ControllerName:             createClusterCredentialsController,
 	applicationsecretclustercontroller.ControllerName:       createApplicationSecretClusterController,
+	defaultpolicycontroller.ControllerName:                  createDefaultPolicyController,
 }
 
 type controllerCreator func(*controllerContext) error
@@ -499,5 +501,19 @@ func createApplicationSecretClusterController(ctrlCtx *controllerContext) error 
 		ctrlCtx.runOptions.workerCount,
 		ctrlCtx.runOptions.workerName,
 		ctrlCtx.runOptions.namespace,
+	)
+}
+
+func createDefaultPolicyController(ctrlCtx *controllerContext) error {
+	return defaultpolicycontroller.Add(
+		ctrlCtx.ctx,
+		ctrlCtx.mgr,
+		ctrlCtx.runOptions.workerCount,
+		ctrlCtx.runOptions.workerName,
+		ctrlCtx.seedGetter,
+		ctrlCtx.configGetter,
+		ctrlCtx.clientProvider,
+		ctrlCtx.log,
+		ctrlCtx.versions,
 	)
 }
