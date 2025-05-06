@@ -26,6 +26,7 @@ import (
 
 	kubermaticv1 "k8c.io/kubermatic/sdk/v2/apis/kubermatic/v1"
 	userclustercontrollermanager "k8c.io/kubermatic/v2/pkg/controller/user-cluster-controller-manager"
+	policybindingreconciler "k8c.io/kubermatic/v2/pkg/controller/user-cluster-controller-manager/policy-binding-reconciler"
 	velerocontroller "k8c.io/kubermatic/v2/pkg/ee/cluster-backup/user-cluster/velero-controller"
 	resourceusagecontroller "k8c.io/kubermatic/v2/pkg/ee/resource-usage-controller"
 	"k8c.io/kubermatic/v2/pkg/resources"
@@ -104,6 +105,10 @@ func setupControllers(
 
 	if err := velerocontroller.Add(seedMgr, userMgr, log, clusterName, versions, overwriteRegistry); err != nil {
 		return fmt.Errorf("failed to create cluster-backup controller: %w", err)
+	}
+
+	if err := policybindingreconciler.Add(seedMgr, userMgr, log, clusterName, clusterIsPaused); err != nil {
+		return fmt.Errorf("failed to create policy-binding-reconciler controller: %w", err)
 	}
 
 	return nil
