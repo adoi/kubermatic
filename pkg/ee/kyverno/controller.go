@@ -35,11 +35,20 @@ import (
 	clusterclient "k8c.io/kubermatic/v2/pkg/cluster/client"
 	"k8c.io/kubermatic/v2/pkg/controller/util"
 	predicateutil "k8c.io/kubermatic/v2/pkg/controller/util/predicate"
+	admissionresources "k8c.io/kubermatic/v2/pkg/ee/kyverno/resources/seed-cluster/admission-controller"
+	backgroundresources "k8c.io/kubermatic/v2/pkg/ee/kyverno/resources/seed-cluster/background-controller"
+	cleanupresources "k8c.io/kubermatic/v2/pkg/ee/kyverno/resources/seed-cluster/cleanup-controller"
+	reportsresources "k8c.io/kubermatic/v2/pkg/ee/kyverno/resources/seed-cluster/reports-controller"
 	userclusterresources "k8c.io/kubermatic/v2/pkg/ee/kyverno/resources/user-cluster"
+	userclusteradmissionresources "k8c.io/kubermatic/v2/pkg/ee/kyverno/resources/user-cluster/admission-controller"
+	userclusterbackgroundresources "k8c.io/kubermatic/v2/pkg/ee/kyverno/resources/user-cluster/background-controller"
+	userclustercleanupresources "k8c.io/kubermatic/v2/pkg/ee/kyverno/resources/user-cluster/cleanup-controller"
+	userclusterreportsresources "k8c.io/kubermatic/v2/pkg/ee/kyverno/resources/user-cluster/reports-controller"
 	kuberneteshelper "k8c.io/kubermatic/v2/pkg/kubernetes"
 	kkpreconciling "k8c.io/kubermatic/v2/pkg/resources/reconciling"
 	"k8c.io/kubermatic/v2/pkg/util/workerlabel"
 	"k8c.io/kubermatic/v2/pkg/version/kubermatic"
+	"k8c.io/reconciler/pkg/reconciling"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -172,9 +181,14 @@ func (r *reconciler) reconcile(ctx context.Context, cluster *kubermaticv1.Cluste
 		}
 	}
 
-	// Install CRDs in user cluster
+	// Ensure User Cluster components
 	if err := r.ensureUserClusterResources(ctx, cluster); err != nil {
 		return nil, err
+	}
+
+	// Ensure seed cluster namespace resources
+	if err := r.ensureSeedClusterNamespaceResources(ctx, cluster); err != nil {
+		return nil, fmt.Errorf("failed to ensure seed cluster namespace resources: %w", err)
 	}
 
 	return nil, nil
@@ -200,5 +214,102 @@ func (r *reconciler) ensureUserClusterResources(ctx context.Context, cluster *ku
 		return fmt.Errorf("failed to reconcile Kyverno CRDs: %w", err)
 	}
 
+	// Create/update ClusterRoles for all controllers
+	clusterRoleCreators := []reconciling.NamedClusterRoleReconcilerFactory{
+		userclusterreportsresources.ClusterRoleReconciler(),
+		userclusterreportsresources.CoreClusterRoleReconciler(),
+		userclustercleanupresources.ClusterRoleReconciler(),
+		userclustercleanupresources.CoreClusterRoleReconciler(),
+		userclusterbackgroundresources.ClusterRoleReconciler(),
+		userclusterbackgroundresources.CoreClusterRoleReconciler(),
+		userclusteradmissionresources.ClusterRoleReconciler(),
+		userclusteradmissionresources.CoreClusterRoleReconciler(),
+	}
+
+	if err := reconciling.ReconcileClusterRoles(ctx, clusterRoleCreators, "", userClusterClient); err != nil {
+		return fmt.Errorf("failed to reconcile ClusterRoles: %w", err)
+	}
+
+	// Create/update ClusterRoleBindings for all controllers
+	clusterRoleBindingCreators := []reconciling.NamedClusterRoleBindingReconcilerFactory{
+		userclusterreportsresources.ClusterRoleBindingReconciler(cluster.Status.NamespaceName),
+		userclusterreportsresources.ViewClusterRoleBindingReconciler(cluster.Status.NamespaceName),
+		userclustercleanupresources.ClusterRoleBindingReconciler(cluster.Status.NamespaceName),
+		userclusterbackgroundresources.ClusterRoleBindingReconciler(cluster.Status.NamespaceName),
+		userclusterbackgroundresources.ViewClusterRoleBindingReconciler(cluster.Status.NamespaceName),
+		userclusteradmissionresources.ClusterRoleBindingReconciler(cluster.Status.NamespaceName),
+		userclusteradmissionresources.ViewClusterRoleBindingReconciler(cluster.Status.NamespaceName),
+	}
+
+	if err := reconciling.ReconcileClusterRoleBindings(ctx, clusterRoleBindingCreators, "", userClusterClient); err != nil {
+		return fmt.Errorf("failed to reconcile ClusterRoleBindings: %w", err)
+	}
+
+	return nil
+}
+
+func (r *reconciler) ensureSeedClusterNamespaceResources(ctx context.Context, cluster *kubermaticv1.Cluster) error {
+	// Create/update ServiceAccounts for all controllers
+	serviceAccountCreators := []reconciling.NamedServiceAccountReconcilerFactory{
+		admissionresources.ServiceAccountReconciler(cluster),
+		backgroundresources.ServiceAccountReconciler(cluster),
+		reportsresources.ServiceAccountReconciler(cluster),
+		cleanupresources.ServiceAccountReconciler(cluster),
+	}
+
+	if err := reconciling.ReconcileServiceAccounts(ctx, serviceAccountCreators, cluster.Status.NamespaceName, r.Client); err != nil {
+		return fmt.Errorf("failed to reconcile ServiceAccounts: %w", err)
+	}
+
+	// Create/update Roles and RoleBindings for all controllers
+	roleCreators := []reconciling.NamedRoleReconcilerFactory{
+		admissionresources.RoleReconciler(cluster),
+		backgroundresources.RoleReconciler(cluster),
+		reportsresources.RoleReconciler(cluster),
+		cleanupresources.RoleReconciler(cluster),
+	}
+
+	if err := reconciling.ReconcileRoles(ctx, roleCreators, cluster.Status.NamespaceName, r.Client); err != nil {
+		return fmt.Errorf("failed to reconcile Roles: %w", err)
+	}
+
+	roleBindingCreators := []reconciling.NamedRoleBindingReconcilerFactory{
+		admissionresources.RoleBindingReconciler(cluster),
+		backgroundresources.RoleBindingReconciler(cluster),
+		reportsresources.RoleBindingReconciler(cluster),
+		cleanupresources.RoleBindingReconciler(cluster),
+	}
+
+	if err := reconciling.ReconcileRoleBindings(ctx, roleBindingCreators, cluster.Status.NamespaceName, r.Client); err != nil {
+		return fmt.Errorf("failed to reconcile RoleBindings: %w", err)
+	}
+
+	// Create/update Deployments for all controllers
+	deploymentCreators := []reconciling.NamedDeploymentReconcilerFactory{
+		admissionresources.DeploymentReconciler(cluster),
+		backgroundresources.DeploymentReconciler(cluster),
+		reportsresources.DeploymentReconciler(cluster),
+		cleanupresources.DeploymentReconciler(cluster),
+	}
+
+	if err := reconciling.ReconcileDeployments(ctx, deploymentCreators, cluster.Status.NamespaceName, r.Client); err != nil {
+		return fmt.Errorf("failed to reconcile Deployments: %w", err)
+	}
+
+	// Create/update Services for all controllers
+	serviceCreators := []reconciling.NamedServiceReconcilerFactory{
+		admissionresources.ServiceReconciler(cluster),
+		admissionresources.MetricsServiceReconciler(cluster),
+		backgroundresources.ServiceReconciler(cluster),
+		backgroundresources.MetricsServiceReconciler(cluster),
+		reportsresources.ServiceReconciler(cluster),
+		reportsresources.MetricsServiceReconciler(cluster),
+		cleanupresources.ServiceReconciler(cluster),
+		cleanupresources.MetricsServiceReconciler(cluster),
+	}
+
+	if err := reconciling.ReconcileServices(ctx, serviceCreators, cluster.Status.NamespaceName, r.Client); err != nil {
+		return fmt.Errorf("failed to reconcile Services: %w", err)
+	}
 	return nil
 }
