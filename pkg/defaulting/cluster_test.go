@@ -17,9 +17,11 @@ limitations under the License.
 package defaulting
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 
 	kubermaticv1 "k8c.io/kubermatic/sdk/v2/apis/kubermatic/v1"
 
@@ -438,4 +440,74 @@ func TestDefaultEventRateLimitPlugin(t *testing.T) {
 			assert.Equal(t, tc.expectedConfig, tc.spec.EventRateLimitConfig)
 		})
 	}
+}
+
+func TestDefaultClusterSpecAuditLogging(t *testing.T) {
+	defaultConfig, err := DefaultConfiguration(&kubermaticv1.KubermaticConfiguration{}, zap.NewNop().Sugar())
+	if err != nil {
+		t.Fatalf("failed to default KubermaticConfiguration: %v", err)
+	}
+
+	makeSeed := func(enforceAuditLogging bool) *kubermaticv1.Seed {
+		return &kubermaticv1.Seed{
+			Spec: kubermaticv1.SeedSpec{
+				Datacenters: map[string]kubermaticv1.Datacenter{
+					"dc1": {
+						Spec: kubermaticv1.DatacenterSpec{
+							EnforceAuditLogging: enforceAuditLogging,
+							GCP:                 &kubermaticv1.DatacenterSpecGCP{},
+						},
+					},
+				},
+				AuditLogging: &kubermaticv1.AuditLoggingSettings{
+					Enabled:      true,
+					PolicyPreset: kubermaticv1.AuditPolicyRecommended,
+				},
+			},
+		}
+	}
+
+	baseSpec := kubermaticv1.ClusterSpec{
+		Cloud: kubermaticv1.CloudSpec{
+			DatacenterName: "dc1",
+			GCP:            &kubermaticv1.GCPCloudSpec{},
+		},
+	}
+
+	t.Run("defaults from seed when cluster settings are nil and enforcement is disabled", func(t *testing.T) {
+		spec := baseSpec
+		if err := DefaultClusterSpec(context.Background(), &spec, nil, nil, makeSeed(false), defaultConfig, nil); err != nil {
+			t.Fatalf("DefaultClusterSpec failed: %v", err)
+		}
+
+		expected := &kubermaticv1.AuditLoggingSettings{
+			Enabled:      true,
+			PolicyPreset: kubermaticv1.AuditPolicyRecommended,
+		}
+		assert.Equal(t, expected, spec.AuditLogging)
+	})
+
+	t.Run("does not overwrite explicit cluster settings when enforcement is disabled", func(t *testing.T) {
+		spec := baseSpec
+		spec.AuditLogging = &kubermaticv1.AuditLoggingSettings{Enabled: false}
+		if err := DefaultClusterSpec(context.Background(), &spec, nil, nil, makeSeed(false), defaultConfig, nil); err != nil {
+			t.Fatalf("DefaultClusterSpec failed: %v", err)
+		}
+
+		assert.Equal(t, &kubermaticv1.AuditLoggingSettings{Enabled: false}, spec.AuditLogging)
+	})
+
+	t.Run("overwrites cluster settings from seed when enforcement is enabled", func(t *testing.T) {
+		spec := baseSpec
+		spec.AuditLogging = &kubermaticv1.AuditLoggingSettings{Enabled: false}
+		if err := DefaultClusterSpec(context.Background(), &spec, nil, nil, makeSeed(true), defaultConfig, nil); err != nil {
+			t.Fatalf("DefaultClusterSpec failed: %v", err)
+		}
+
+		expected := &kubermaticv1.AuditLoggingSettings{
+			Enabled:      true,
+			PolicyPreset: kubermaticv1.AuditPolicyRecommended,
+		}
+		assert.Equal(t, expected, spec.AuditLogging)
+	})
 }

@@ -103,23 +103,32 @@ func DefaultClusterSpec(
 		return fieldErr
 	}
 
-	// Set the audit logging settings (skip if cluster has opt-out annotation)
+	// Set the audit logging settings (skip if cluster has opt-out annotation).
+	// In non-enforced datacenters, seed settings are used only as defaults for clusters
+	// that do not have audit logging configured yet.
 	if clusterAnnotations[kubermaticv1.SkipAuditLoggingEnforcementAnnotation] != "true" {
-		if seed.Spec.AuditLogging != nil {
-			spec.AuditLogging = new(kubermaticv1.AuditLoggingSettings)
-			(*seed.Spec.AuditLogging).DeepCopyInto(spec.AuditLogging)
-		}
-
-		// Enforce audit logging
 		if datacenter.Spec.EnforceAuditLogging {
+			// In enforced datacenters, always synchronize with seed settings.
+			if seed.Spec.AuditLogging != nil {
+				spec.AuditLogging = new(kubermaticv1.AuditLoggingSettings)
+				(*seed.Spec.AuditLogging).DeepCopyInto(spec.AuditLogging)
+			}
+
 			if spec.AuditLogging == nil {
 				spec.AuditLogging = &kubermaticv1.AuditLoggingSettings{}
 			}
 			spec.AuditLogging.Enabled = true
+		} else if seed.Spec.AuditLogging != nil && spec.AuditLogging == nil {
+			// In non-enforced datacenters, only default missing cluster settings.
+			spec.AuditLogging = new(kubermaticv1.AuditLoggingSettings)
+			(*seed.Spec.AuditLogging).DeepCopyInto(spec.AuditLogging)
 		}
 
-		// Enforce audit webhook backend
+		// Enforce audit webhook backend.
 		if datacenter.Spec.EnforcedAuditWebhookSettings != nil {
+			if spec.AuditLogging == nil {
+				spec.AuditLogging = &kubermaticv1.AuditLoggingSettings{}
+			}
 			spec.AuditLogging.WebhookBackend = datacenter.Spec.EnforcedAuditWebhookSettings
 		}
 	}

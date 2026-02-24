@@ -875,6 +875,53 @@ func TestMutator(t *testing.T) {
 	}
 }
 
+func TestMutatorPreservesExplicitDisabledAuditLoggingWhenNotEnforced(t *testing.T) {
+	testSeed := seed.DeepCopy()
+	testSeed.Spec.AuditLogging = &kubermaticv1.AuditLoggingSettings{
+		Enabled:      true,
+		PolicyPreset: kubermaticv1.AuditPolicyRecommended,
+	}
+	dc := testSeed.Spec.Datacenters["openstack-dc"]
+	dc.Spec.EnforceAuditLogging = false
+	testSeed.Spec.Datacenters["openstack-dc"] = dc
+
+	oldCluster := rawClusterGen{
+		Name: "foo",
+		CloudSpec: kubermaticv1.CloudSpec{
+			DatacenterName: "openstack-dc",
+			Openstack:      &kubermaticv1.OpenstackCloudSpec{},
+		},
+	}.Do()
+	oldCluster.Spec.AuditLogging = &kubermaticv1.AuditLoggingSettings{
+		Enabled:      true,
+		PolicyPreset: kubermaticv1.AuditPolicyRecommended,
+	}
+
+	newCluster := oldCluster.DeepCopy()
+	newCluster.Spec.AuditLogging = &kubermaticv1.AuditLoggingSettings{
+		Enabled: false,
+	}
+
+	dummySeedClient := fake.NewClientBuilder().Build()
+	configGetter, err := kubernetes.StaticKubermaticConfigurationGetterFactory(&config)
+	if err != nil {
+		t.Fatalf("Failed to create KubermaticConfigurationGetter: %v", err)
+	}
+
+	mutator := NewMutator(dummySeedClient, configGetter, test.NewSeedGetter(testSeed), nil)
+	mutator.disableProviderMutation = true
+
+	mutatedCluster, mutateErr := mutator.Mutate(context.Background(), oldCluster, newCluster)
+	if mutateErr != nil {
+		t.Fatalf("Request should have succeeded, but failed: %v", mutateErr)
+	}
+
+	expected := &kubermaticv1.AuditLoggingSettings{Enabled: false}
+	if !diff.SemanticallyEqual(expected, mutatedCluster.Spec.AuditLogging) {
+		t.Fatalf("audit logging config mismatch:\n%v", diff.ObjectDiff(expected, mutatedCluster.Spec.AuditLogging))
+	}
+}
+
 type rawClusterGen struct {
 	Name                  string
 	Version               semver.Semver
