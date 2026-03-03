@@ -29,6 +29,11 @@ const (
 	PolicyBindingKindName = "PolicyBinding"
 )
 
+const (
+	// PolicyBindingCleanupFinalizer indicates that Kyverno resources created by a PolicyBinding need cleanup.
+	PolicyBindingCleanupFinalizer = "kubermatic.k8c.io/cleanup-policy-binding"
+)
+
 // PolicyBindingConditionType defines the type of condition in PolicyBindingStatus.
 //
 // +kubebuilder:validation:Enum=Ready;TemplateValid;KyvernoPolicyApplied

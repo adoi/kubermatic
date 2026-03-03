@@ -323,7 +323,7 @@ func genPolicyBinding(name, namespace, templateName string) *kubermaticv1.Policy
 
 func genPolicyBindingWithFinalizer(name, namespace, templateName string) *kubermaticv1.PolicyBinding {
 	binding := genPolicyBinding(name, namespace, templateName)
-	binding.Finalizers = []string{cleanupFinalizer}
+	binding.Finalizers = []string{kubermaticv1.PolicyBindingCleanupFinalizer}
 	return binding
 }
 

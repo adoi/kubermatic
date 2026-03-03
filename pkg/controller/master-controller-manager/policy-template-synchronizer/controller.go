@@ -19,6 +19,7 @@ package policytemplatesynchronizer
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -136,6 +137,14 @@ func (r *reconciler) handleDeletion(ctx context.Context, log *zap.SugaredLogger,
 		return nil
 	}
 
+	// Clean up PolicyBindings referencing this template on all seeds before
+	// deleting the seed PolicyTemplate itself. This ensures that bindings
+	// whose user-cluster controller is no longer running (e.g. cluster
+	// deleted) do not block the finalizer.
+	if err := r.cleanupPolicyBindings(ctx, log, policyTemplate); err != nil {
+		return fmt.Errorf("failed to cleanup PolicyBindings: %w", err)
+	}
+
 	err := r.seedClients.Each(ctx, log, func(_ string, seedClient ctrlruntimeclient.Client, log *zap.SugaredLogger) error {
 		err := seedClient.Delete(ctx, &kubermaticv1.PolicyTemplate{
 			ObjectMeta: metav1.ObjectMeta{
@@ -150,6 +159,61 @@ func (r *reconciler) handleDeletion(ctx context.Context, log *zap.SugaredLogger,
 	}
 
 	return kuberneteshelper.TryRemoveFinalizer(ctx, r.masterClient, policyTemplate, kubermaticv1.PolicyTemplateSeedCleanupFinalizer)
+}
+
+// cleanupPolicyBindings deletes all PolicyBindings that reference the given
+// PolicyTemplate on every seed. For bindings in "cluster-*" namespaces where
+// the owning Cluster no longer exists, the cleanup finalizer is force-removed
+// first (the user-cluster controller that would normally handle it is gone).
+func (r *reconciler) cleanupPolicyBindings(ctx context.Context, log *zap.SugaredLogger, policyTemplate *kubermaticv1.PolicyTemplate) error {
+	return r.seedClients.Each(ctx, log, func(_ string, seedClient ctrlruntimeclient.Client, log *zap.SugaredLogger) error {
+		bindingList := &kubermaticv1.PolicyBindingList{}
+		if err := seedClient.List(ctx, bindingList); err != nil {
+			return fmt.Errorf("failed to list PolicyBindings: %w", err)
+		}
+
+		for i := range bindingList.Items {
+			binding := &bindingList.Items[i]
+			if binding.Spec.PolicyTemplateRef.Name != policyTemplate.Name {
+				continue
+			}
+
+			// If the binding lives in a cluster-* namespace and the Cluster
+			// is gone, the user-cluster PolicyBinding controller is no longer
+			// running and will never remove its finalizer. Force-remove it so
+			// the binding can be garbage-collected.
+			if strings.HasPrefix(binding.Namespace, "cluster-") &&
+				kuberneteshelper.HasFinalizer(binding, kubermaticv1.PolicyBindingCleanupFinalizer) {
+				clusterName := strings.TrimPrefix(binding.Namespace, "cluster-")
+				cluster := &kubermaticv1.Cluster{}
+				if err := seedClient.Get(ctx, ctrlruntimeclient.ObjectKey{Name: clusterName}, cluster); apierrors.IsNotFound(err) {
+					log.Infow("Force-removing cleanup finalizer from orphaned PolicyBinding", "binding", binding.Name, "namespace", binding.Namespace)
+					if err := kuberneteshelper.TryRemoveFinalizer(ctx, seedClient, binding, kubermaticv1.PolicyBindingCleanupFinalizer); err != nil {
+						return fmt.Errorf("failed to remove finalizer from orphaned PolicyBinding %s/%s: %w", binding.Namespace, binding.Name, err)
+					}
+				} else if err != nil {
+					return fmt.Errorf("failed to get Cluster %s: %w", clusterName, err)
+				}
+			}
+
+			if err := seedClient.Delete(ctx, binding); ctrlruntimeclient.IgnoreNotFound(err) != nil {
+				return fmt.Errorf("failed to delete PolicyBinding %s/%s: %w", binding.Namespace, binding.Name, err)
+			}
+		}
+
+		// Re-list to verify all bindings referencing this template are fully gone.
+		remainingList := &kubermaticv1.PolicyBindingList{}
+		if err := seedClient.List(ctx, remainingList); err != nil {
+			return fmt.Errorf("failed to re-list PolicyBindings: %w", err)
+		}
+		for _, binding := range remainingList.Items {
+			if binding.Spec.PolicyTemplateRef.Name == policyTemplate.Name {
+				return fmt.Errorf("PolicyBinding %s/%s still exists, will retry", binding.Namespace, binding.Name)
+			}
+		}
+
+		return nil
+	})
 }
 
 func policyTemplateReconcilerFactory(policyTemplate *kubermaticv1.PolicyTemplate) reconciling.NamedPolicyTemplateReconcilerFactory {

@@ -27,6 +27,7 @@ import (
 	"k8c.io/kubermatic/v2/pkg/test/fake"
 	"k8c.io/kubermatic/v2/pkg/test/generator"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -71,6 +72,41 @@ func TestReconcile(t *testing.T) {
 				WithObjects(generatePolicyTemplate(policyTemplateName, false), generator.GenTestSeed()).
 				Build(),
 		},
+		{
+			name:                   "scenario 3: deletion cleans up PolicyBindings referencing the template",
+			requestName:            policyTemplateName,
+			expectedPolicyTemplate: nil,
+			masterClient: fake.
+				NewClientBuilder().
+				WithObjects(generatePolicyTemplate(policyTemplateName, true), generator.GenTestSeed()).
+				Build(),
+			seedClient: fake.
+				NewClientBuilder().
+				WithObjects(
+					generatePolicyTemplate(policyTemplateName, false),
+					generateCluster("test-cluster"),
+					generatePolicyBinding("binding-1", "cluster-test-cluster", policyTemplateName),
+					generatePolicyBinding("binding-2", "cluster-test-cluster", policyTemplateName),
+				).
+				Build(),
+		},
+		{
+			name:                   "scenario 4: deletion force-removes finalizer from orphaned PolicyBindings when cluster is gone",
+			requestName:            policyTemplateName,
+			expectedPolicyTemplate: nil,
+			masterClient: fake.
+				NewClientBuilder().
+				WithObjects(generatePolicyTemplate(policyTemplateName, true), generator.GenTestSeed()).
+				Build(),
+			seedClient: fake.
+				NewClientBuilder().
+				WithObjects(
+					generatePolicyTemplate(policyTemplateName, false),
+					// No Cluster object — simulates a deleted cluster
+					generatePolicyBindingWithFinalizer("orphan-binding", "cluster-gone-cluster", policyTemplateName),
+				).
+				Build(),
+		},
 	}
 
 	for _, tc := range testCases {
@@ -109,7 +145,46 @@ func TestReconcile(t *testing.T) {
 					t.Fatalf("Objects differ:\n%v", diff.ObjectDiff(tc.expectedPolicyTemplate, seedPolicyTemplate))
 				}
 			}
+
+			// Verify no PolicyBindings referencing this template remain on seed.
+			bindingList := &kubermaticv1.PolicyBindingList{}
+			if err := tc.seedClient.List(ctx, bindingList); err != nil {
+				t.Fatalf("failed to list PolicyBindings: %v", err)
+			}
+			for _, b := range bindingList.Items {
+				if b.Spec.PolicyTemplateRef.Name == tc.requestName {
+					t.Fatalf("PolicyBinding %s/%s still references deleted PolicyTemplate", b.Namespace, b.Name)
+				}
+			}
 		})
+	}
+}
+
+func generatePolicyBinding(name, namespace, templateName string) *kubermaticv1.PolicyBinding {
+	return &kubermaticv1.PolicyBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: kubermaticv1.PolicyBindingSpec{
+			PolicyTemplateRef: corev1.ObjectReference{
+				Name: templateName,
+			},
+		},
+	}
+}
+
+func generatePolicyBindingWithFinalizer(name, namespace, templateName string) *kubermaticv1.PolicyBinding {
+	binding := generatePolicyBinding(name, namespace, templateName)
+	binding.Finalizers = []string{kubermaticv1.PolicyBindingCleanupFinalizer}
+	return binding
+}
+
+func generateCluster(name string) *kubermaticv1.Cluster {
+	return &kubermaticv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
 	}
 }
 
