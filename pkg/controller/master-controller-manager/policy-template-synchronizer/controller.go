@@ -162,10 +162,7 @@ func (r *reconciler) handleDeletion(ctx context.Context, log *zap.SugaredLogger,
 }
 
 // cleanupPolicyBindings deletes all PolicyBindings that reference the given
-// PolicyTemplate on every seed. For bindings in "cluster-*" namespaces where
-// the owning Cluster no longer exists or has Kyverno disabled, the cleanup
-// finalizer is force-removed first because the user-cluster cleanup controller
-// is not expected to remove it.
+// PolicyTemplate on every seed.
 func (r *reconciler) cleanupPolicyBindings(ctx context.Context, log *zap.SugaredLogger, policyTemplate *kubermaticv1.PolicyTemplate) error {
 	return r.seedClients.Each(ctx, log, func(_ string, seedClient ctrlruntimeclient.Client, log *zap.SugaredLogger) error {
 		bindingList := &kubermaticv1.PolicyBindingList{}
@@ -179,23 +176,17 @@ func (r *reconciler) cleanupPolicyBindings(ctx context.Context, log *zap.Sugared
 				continue
 			}
 
-			// If the binding lives in a cluster-* namespace and the Cluster
-			// is gone or has Kyverno disabled, the user-cluster
-			// PolicyBinding controller will not clean up the finalizer.
-			// Force-remove it so the binding can be garbage-collected.
 			if strings.HasPrefix(binding.Namespace, "cluster-") &&
 				kuberneteshelper.HasFinalizer(binding, kubermaticv1.PolicyBindingCleanupFinalizer) {
 				clusterName := strings.TrimPrefix(binding.Namespace, "cluster-")
 				cluster := &kubermaticv1.Cluster{}
 				if err := seedClient.Get(ctx, ctrlruntimeclient.ObjectKey{Name: clusterName}, cluster); apierrors.IsNotFound(err) {
-					log.Infow("Force-removing cleanup finalizer from orphaned PolicyBinding", "binding", binding.Name, "namespace", binding.Namespace)
 					if err := kuberneteshelper.TryRemoveFinalizer(ctx, seedClient, binding, kubermaticv1.PolicyBindingCleanupFinalizer); err != nil {
 						return fmt.Errorf("failed to remove finalizer from orphaned PolicyBinding %s/%s: %w", binding.Namespace, binding.Name, err)
 					}
 				} else if err != nil {
 					return fmt.Errorf("failed to get Cluster %s: %w", clusterName, err)
 				} else if !cluster.Spec.IsKyvernoEnabled() {
-					log.Infow("Force-removing cleanup finalizer from PolicyBinding because Kyverno is disabled on the cluster", "binding", binding.Name, "namespace", binding.Namespace, "cluster", clusterName)
 					if err := kuberneteshelper.TryRemoveFinalizer(ctx, seedClient, binding, kubermaticv1.PolicyBindingCleanupFinalizer); err != nil {
 						return fmt.Errorf("failed to remove finalizer from PolicyBinding %s/%s for cluster with disabled Kyverno: %w", binding.Namespace, binding.Name, err)
 					}

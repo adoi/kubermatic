@@ -46,10 +46,7 @@ func TestReconcile(t *testing.T) {
 		expectedPolicyTemplate *kubermaticv1.PolicyTemplate
 		masterClient           ctrlruntimeclient.Client
 		seedClient             ctrlruntimeclient.Client
-		// expectBindingsPending, when true, expects that some PolicyBindings
-		// still exist (marked for deletion) because the user-cluster controller
-		// has not yet removed their finalizer.
-		expectBindingsPending bool
+		expectBindingsPending  bool
 	}{
 		{
 			name:                   "scenario 1: sync policy template from master cluster to seed cluster",
