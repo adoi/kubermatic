@@ -46,6 +46,10 @@ func TestReconcile(t *testing.T) {
 		expectedPolicyTemplate *kubermaticv1.PolicyTemplate
 		masterClient           ctrlruntimeclient.Client
 		seedClient             ctrlruntimeclient.Client
+		// expectBindingsPending, when true, expects that some PolicyBindings
+		// still exist (marked for deletion) because the user-cluster controller
+		// has not yet removed their finalizer.
+		expectBindingsPending bool
 	}{
 		{
 			name:                   "scenario 1: sync policy template from master cluster to seed cluster",
@@ -84,9 +88,27 @@ func TestReconcile(t *testing.T) {
 				NewClientBuilder().
 				WithObjects(
 					generatePolicyTemplate(policyTemplateName, false),
-					generateCluster("test-cluster"),
+					generateCluster("test-cluster", true),
 					generatePolicyBinding("binding-1", "cluster-test-cluster", policyTemplateName),
 					generatePolicyBinding("binding-2", "cluster-test-cluster", policyTemplateName),
+				).
+				Build(),
+		},
+		{
+			name:                   "scenario 3b: deletion issues delete for PolicyBindings with finalizer on kyverno-enabled cluster",
+			requestName:            policyTemplateName,
+			expectedPolicyTemplate: nil,
+			expectBindingsPending:  true,
+			masterClient: fake.
+				NewClientBuilder().
+				WithObjects(generatePolicyTemplate(policyTemplateName, true), generator.GenTestSeed()).
+				Build(),
+			seedClient: fake.
+				NewClientBuilder().
+				WithObjects(
+					generatePolicyTemplate(policyTemplateName, false),
+					generateCluster("active-cluster", true),
+					generatePolicyBindingWithFinalizer("active-binding", "cluster-active-cluster", policyTemplateName),
 				).
 				Build(),
 		},
@@ -104,6 +126,23 @@ func TestReconcile(t *testing.T) {
 					generatePolicyTemplate(policyTemplateName, false),
 					// No Cluster object — simulates a deleted cluster
 					generatePolicyBindingWithFinalizer("orphan-binding", "cluster-gone-cluster", policyTemplateName),
+				).
+				Build(),
+		},
+		{
+			name:                   "scenario 5: deletion force-removes finalizer when cluster exists with kyverno disabled",
+			requestName:            policyTemplateName,
+			expectedPolicyTemplate: nil,
+			masterClient: fake.
+				NewClientBuilder().
+				WithObjects(generatePolicyTemplate(policyTemplateName, true), generator.GenTestSeed()).
+				Build(),
+			seedClient: fake.
+				NewClientBuilder().
+				WithObjects(
+					generatePolicyTemplate(policyTemplateName, false),
+					generateCluster("kyverno-disabled", false),
+					generatePolicyBindingWithFinalizer("disabled-binding", "cluster-kyverno-disabled", policyTemplateName),
 				).
 				Build(),
 		},
@@ -146,14 +185,22 @@ func TestReconcile(t *testing.T) {
 				}
 			}
 
-			// Verify no PolicyBindings referencing this template remain on seed.
+			// Verify PolicyBinding cleanup on seed.
 			bindingList := &kubermaticv1.PolicyBindingList{}
 			if err := tc.seedClient.List(ctx, bindingList); err != nil {
 				t.Fatalf("failed to list PolicyBindings: %v", err)
 			}
 			for _, b := range bindingList.Items {
-				if b.Spec.PolicyTemplateRef.Name == tc.requestName {
+				if b.Spec.PolicyTemplateRef.Name != tc.requestName {
+					continue
+				}
+				if !tc.expectBindingsPending {
 					t.Fatalf("PolicyBinding %s/%s still references deleted PolicyTemplate", b.Namespace, b.Name)
+				}
+				// Binding is expected to still exist (finalizer held by user-cluster controller),
+				// but it must have been marked for deletion.
+				if b.DeletionTimestamp.IsZero() {
+					t.Fatalf("PolicyBinding %s/%s should have DeletionTimestamp set", b.Namespace, b.Name)
 				}
 			}
 		})
@@ -180,10 +227,15 @@ func generatePolicyBindingWithFinalizer(name, namespace, templateName string) *k
 	return binding
 }
 
-func generateCluster(name string) *kubermaticv1.Cluster {
+func generateCluster(name string, kyvernoEnabled bool) *kubermaticv1.Cluster {
 	return &kubermaticv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
+		},
+		Spec: kubermaticv1.ClusterSpec{
+			Kyverno: &kubermaticv1.KyvernoSettings{
+				Enabled: kyvernoEnabled,
+			},
 		},
 	}
 }

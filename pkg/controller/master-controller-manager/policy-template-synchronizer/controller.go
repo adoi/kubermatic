@@ -139,8 +139,8 @@ func (r *reconciler) handleDeletion(ctx context.Context, log *zap.SugaredLogger,
 
 	// Clean up PolicyBindings referencing this template on all seeds before
 	// deleting the seed PolicyTemplate itself. This ensures that bindings
-	// whose user-cluster controller is no longer running (e.g. cluster
-	// deleted) do not block the finalizer.
+	// whose user-cluster controller is not running or will not clean up
+	// (e.g. cluster deleted, Kyverno disabled) do not block the finalizer.
 	if err := r.cleanupPolicyBindings(ctx, log, policyTemplate); err != nil {
 		return fmt.Errorf("failed to cleanup PolicyBindings: %w", err)
 	}
@@ -163,8 +163,9 @@ func (r *reconciler) handleDeletion(ctx context.Context, log *zap.SugaredLogger,
 
 // cleanupPolicyBindings deletes all PolicyBindings that reference the given
 // PolicyTemplate on every seed. For bindings in "cluster-*" namespaces where
-// the owning Cluster no longer exists, the cleanup finalizer is force-removed
-// first (the user-cluster controller that would normally handle it is gone).
+// the owning Cluster no longer exists or has Kyverno disabled, the cleanup
+// finalizer is force-removed first because the user-cluster cleanup controller
+// is not expected to remove it.
 func (r *reconciler) cleanupPolicyBindings(ctx context.Context, log *zap.SugaredLogger, policyTemplate *kubermaticv1.PolicyTemplate) error {
 	return r.seedClients.Each(ctx, log, func(_ string, seedClient ctrlruntimeclient.Client, log *zap.SugaredLogger) error {
 		bindingList := &kubermaticv1.PolicyBindingList{}
@@ -179,8 +180,8 @@ func (r *reconciler) cleanupPolicyBindings(ctx context.Context, log *zap.Sugared
 			}
 
 			// If the binding lives in a cluster-* namespace and the Cluster
-			// is gone, the user-cluster PolicyBinding controller is no longer
-			// running and will never remove its finalizer. Force-remove it so
+			// is gone or has Kyverno disabled, the user-cluster PolicyBinding
+			// controller will not clean up the finalizer. Force-remove it so
 			// the binding can be garbage-collected.
 			if strings.HasPrefix(binding.Namespace, "cluster-") &&
 				kuberneteshelper.HasFinalizer(binding, kubermaticv1.PolicyBindingCleanupFinalizer) {
@@ -193,22 +194,16 @@ func (r *reconciler) cleanupPolicyBindings(ctx context.Context, log *zap.Sugared
 					}
 				} else if err != nil {
 					return fmt.Errorf("failed to get Cluster %s: %w", clusterName, err)
+				} else if !cluster.Spec.IsKyvernoEnabled() {
+					log.Infow("Force-removing cleanup finalizer from PolicyBinding because Kyverno is disabled on the cluster", "binding", binding.Name, "namespace", binding.Namespace, "cluster", clusterName)
+					if err := kuberneteshelper.TryRemoveFinalizer(ctx, seedClient, binding, kubermaticv1.PolicyBindingCleanupFinalizer); err != nil {
+						return fmt.Errorf("failed to remove finalizer from PolicyBinding %s/%s for cluster with disabled Kyverno: %w", binding.Namespace, binding.Name, err)
+					}
 				}
 			}
 
 			if err := seedClient.Delete(ctx, binding); ctrlruntimeclient.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("failed to delete PolicyBinding %s/%s: %w", binding.Namespace, binding.Name, err)
-			}
-		}
-
-		// Re-list to verify all bindings referencing this template are fully gone.
-		remainingList := &kubermaticv1.PolicyBindingList{}
-		if err := seedClient.List(ctx, remainingList); err != nil {
-			return fmt.Errorf("failed to re-list PolicyBindings: %w", err)
-		}
-		for _, binding := range remainingList.Items {
-			if binding.Spec.PolicyTemplateRef.Name == policyTemplate.Name {
-				return fmt.Errorf("PolicyBinding %s/%s still exists, will retry", binding.Namespace, binding.Name)
 			}
 		}
 
