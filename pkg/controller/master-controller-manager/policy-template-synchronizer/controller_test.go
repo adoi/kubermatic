@@ -237,6 +237,9 @@ func generateCluster(name string, kyvernoEnabled bool) *kubermaticv1.Cluster {
 				Enabled: kyvernoEnabled,
 			},
 		},
+		Status: kubermaticv1.ClusterStatus{
+			NamespaceName: "cluster-" + name,
+		},
 	}
 }
 

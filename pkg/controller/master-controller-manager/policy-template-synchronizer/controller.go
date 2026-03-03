@@ -180,9 +180,9 @@ func (r *reconciler) cleanupPolicyBindings(ctx context.Context, log *zap.Sugared
 			}
 
 			// If the binding lives in a cluster-* namespace and the Cluster
-			// is gone or has Kyverno disabled, the user-cluster PolicyBinding
-			// controller will not clean up the finalizer. Force-remove it so
-			// the binding can be garbage-collected.
+			// is gone or has Kyverno disabled, the user-cluster
+			// PolicyBinding controller will not clean up the finalizer.
+			// Force-remove it so the binding can be garbage-collected.
 			if strings.HasPrefix(binding.Namespace, "cluster-") &&
 				kuberneteshelper.HasFinalizer(binding, kubermaticv1.PolicyBindingCleanupFinalizer) {
 				clusterName := strings.TrimPrefix(binding.Namespace, "cluster-")
