@@ -138,16 +138,16 @@ func (r *reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 	if cluster.DeletionTimestamp != nil {
 		if kuberneteshelper.HasFinalizer(cluster, CleanupFinalizer) {
 			log.Debug("Cleaning up kubeLB resources")
-			return reconcile.Result{}, r.handleKubeLBCleanup(ctx, cluster)
+			return r.handleKubeLBCleanup(ctx, cluster)
 		}
 		// Finalizer doesn't exist so clean up is already done.
 		return reconcile.Result{}, nil
 	}
 
-	// Kubelb was disabled after it was enabled. Clean up resources.
-	if kuberneteshelper.HasFinalizer(cluster, CleanupFinalizer) && !cluster.Spec.IsKubeLBEnabled() {
+	// Finish an initiated cleanup even if KubeLB was re-enabled in the meantime.
+	if kuberneteshelper.HasFinalizer(cluster, CleanupFinalizer) && (!cluster.Spec.IsKubeLBEnabled() || cluster.Annotations[cleanupPhaseAnnotation] != "") {
 		log.Debug("Cleaning up kubeLB resources")
-		return reconcile.Result{}, r.handleKubeLBCleanup(ctx, cluster)
+		return r.handleKubeLBCleanup(ctx, cluster)
 	}
 
 	// Kubelb is disabled. Nothing to do.
@@ -398,16 +398,23 @@ func (r *reconciler) getKubeLBManagementClusterClient(ctx context.Context, seed 
 		return nil, nil, fmt.Errorf("no kubeconfig found")
 	}
 
+	client, err := newKubeLBClient(kubeconfigValue)
+	return client, kubeconfigValue, err
+}
+
+func newKubeLBClient(kubeconfigValue []byte) (ctrlruntimeclient.Client, error) {
+	if len(kubeconfigValue) == 0 {
+		return nil, fmt.Errorf("no kubeconfig found")
+	}
 	kubeconfig, err := clientcmd.Load(kubeconfigValue)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse kubeconfig: %w", err)
+		return nil, fmt.Errorf("failed to parse kubeconfig: %w", err)
 	}
 	cfg, err := clientcmd.NewInteractiveClientConfig(*kubeconfig, "", nil, nil, nil).ClientConfig()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load kubeconfig: %w", err)
+		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
-	client, err := ctrlruntimeclient.New(cfg, ctrlruntimeclient.Options{})
-	return client, kubeconfigValue, err
+	return ctrlruntimeclient.New(cfg, ctrlruntimeclient.Options{})
 }
 
 func getKubeLBKubeconfigSecret(ctx context.Context, client ctrlruntimeclient.Client, seed *kubermaticv1.Seed, dc kubermaticv1.Datacenter) (*corev1.Secret, error) {

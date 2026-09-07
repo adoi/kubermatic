@@ -28,5 +28,17 @@ It is responsible for the following:
 1. KubeLB cluster: register the user cluster as a tenant.
 2. Seed cluster: deploy KubeLB CCM to the user cluster namespace.
 3. User cluster: configure RBAC for the KubeLB CCM.
+
+Cleanup persists its progress on the Cluster and finishes even if KubeLB is
+re-enabled during teardown. WAF policies are drained while the CCM still runs.
+The CCM is then scaled to zero, and KKP waits for its Pods to stop before
+removing the tenant proxy and releasing the proxy's TenantState finalizer with
+the scoped tenant credential. This prevents resource recreation without
+depending on credentials that the management Tenant controller revokes during
+deletion. User resources are detached only after the management Tenant and its
+namespace have disappeared; user-cluster RBAC/CRDs and seed resources are
+removed last. Missing optional APIs are tolerated, while other errors and
+foreign finalizers keep cleanup pending. A pending or failing cleanup reports
+what it is waiting on as events on the Cluster and in the controller log.
 */
 package kubelbcontroller
