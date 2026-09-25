@@ -305,7 +305,8 @@ func (j *ClusterJig) Create(ctx context.Context, waitForHealthy bool) (*kubermat
 
 	if waitForHealthy {
 		log.Info("Waiting for cluster to become healthy...")
-		if err = j.WaitForHealthyControlPlane(ctx, 5*time.Minute); err != nil {
+		// 5 minutes was regularly exceeded under CI load.
+		if err = j.WaitForHealthyControlPlane(ctx, 10*time.Minute); err != nil {
 			return nil, fmt.Errorf("failed to wait for cluster to become healthy: %w", err)
 		}
 	}
